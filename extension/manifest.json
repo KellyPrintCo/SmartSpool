@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "MakerWorld Print Wizard for SSO-Lite",
+  "version": "1.0.0",
+  "description": "Beginner-friendly step-by-step print wizard for MakerWorld models, integrated with SmartSpool OS Lite.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://makerworld.com/*",
+    "https://*.makerworld.com/*",
+    "http://ssolite.local/*",
+    "http://*/*",
+    "https://raw.githubusercontent.com/*",
+    "https://github.com/*",
+    "https://objects.githubusercontent.com/*"
+  ],
+  "content_scripts": [{
+    "matches": [
+      "https://makerworld.com/*",
+      "https://*.makerworld.com/*"
+    ],
+    "js": ["content.js"],
+    "css": ["content.css"],
+    "run_at": "document_idle"
+  }],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "MakerWorld Print Wizard",
+    "default_icon": {
+      "16":  "icons/icon16.png",
+      "48":  "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16":  "icons/icon16.png",
+    "48":  "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [{
+    "resources": ["wizard.html", "wizard.js", "wizard.css", "inject.js"],
+    "matches": ["https://makerworld.com/*", "https://*.makerworld.com/*"]
+  }]
+}

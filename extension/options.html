@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Print Wizard — Settings</title>
+<link rel="stylesheet" href="popup.css">
+<style>
+  html,body{width:auto}
+  main{max-width:520px;margin:0 auto;padding:24px}
+  label{display:block;margin:14px 0 6px;color:var(--mut);font-size:.9em}
+  input{width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--brd);
+    background:var(--bg);color:var(--fg);font-size:1em}
+  .ok-msg{color:var(--ok);margin-left:8px;font-size:.9em}
+  h1{font-size:1.4em;margin-top:0}
+  p code{background:#0d1117;padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Print Wizard Settings</h1>
+  <p class="muted">
+    The wizard talks to your SSO-Lite device over your local network.
+    Use the mDNS hostname <code>ssolite.local</code> if your computer
+    supports it (most do), or enter the device IP directly.
+  </p>
+  <label>SSO-Lite address</label>
+  <input id="ssoHost" placeholder="ssolite.local" autocomplete="off">
+
+  <label>Port (almost always 80)</label>
+  <input id="ssoPort" type="number" value="80">
+
+  <div style="margin-top:18px;display:flex;gap:10px;align-items:center">
+    <button id="testBtn" class="ghost">Test connection</button>
+    <button id="saveBtn" class="primary">Save</button>
+    <span id="msg" class="ok-msg"></span>
+  </div>
+</main>
+<script src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Print Wizard</title>
+<link rel="stylesheet" href="wizard.css">
+</head>
+<body>
+<div id="modal" class="modal">
+  <header>
+    <div class="brand">
+      <span class="brand-ic">🖨️</span>
+      <span>Print Wizard</span>
+    </div>
+    <button id="close" class="icon-btn" title="Close">✕</button>
+  </header>
+
+  <div id="progress" class="progress" aria-hidden="true">
+    <div class="bar"><div id="bar-fill" class="bar-fill"></div></div>
+    <div id="step-label" class="step-label">Step 1 of 6</div>
+  </div>
+
+  <main id="main">
+    <!-- Each step is a <section class="step"> hidden/shown by JS. -->
+
+    <!-- Step 1: welcome / model summary ----------------------------- -->
+    <section class="step" data-step="welcome">
+      <h1 id="modelTitle">Loading model…</h1>
+      <img id="modelImg" alt="" class="hero-img" hidden>
+      <p class="lead">
+        This wizard will walk you through everything you need to do to
+        print this model — checking your filament, picking the right
+        build plate, and sending it to your printer.
+      </p>
+      <div id="modelMeta" class="chips"></div>
+      <div class="actions">
+        <button class="primary" data-go="filament-check">Let's go →</button>
+      </div>
+    </section>
+
+    <!-- Step 2: SSO-Lite connectivity check ------------------------- -->
+    <section class="step" data-step="connect">
+      <h1>Connecting to your spool reader…</h1>
+      <div id="connectStatus" class="status pending">Looking for SSO-Lite…</div>
+      <p class="lead muted">
+        We need to talk to your SmartSpool device to read what's loaded.
+        Make sure it's powered on and on the same Wi-Fi.
+      </p>
+      <div class="actions">
+        <button class="ghost" data-action="openSettings">Change device address</button>
+        <button class="ghost" data-action="retryConnect">Try again</button>
+        <button class="primary" id="connectContinue" onclick="advanceFromConnect()" disabled>Continue →</button>
+      </div>
+    </section>
+
+    <!-- Step: firmware update ---------------------------------------- -->
+    <section class="step" data-step="fw-update">
+      <h1 id="fwUpdateTitle">Firmware update available</h1>
+      <p class="lead" id="fwUpdateLead"></p>
+
+      <!-- version comparison pill row -->
+      <div class="fw-version-row">
+        <div class="fw-ver-box">
+          <div class="fw-ver-label">Installed</div>
+          <div id="fwCurrent" class="fw-ver-num">--</div>
+        </div>
+        <div class="fw-arrow">→</div>
+        <div class="fw-ver-box accent">
+          <div class="fw-ver-label">Latest</div>
+          <div id="fwLatest" class="fw-ver-num">--</div>
+        </div>
+      </div>
+
+      <div id="fwReleaseNotes" class="hint-box" style="display:none"></div>
+
+      <!-- Progress section (hidden until update starts) -->
+      <div id="fwProgress" style="display:none">
+        <div id="fwPhaseLabel" class="lead" style="margin-bottom:8px">Preparing…</div>
+        <div class="ota-bar"><div id="fwProgressFill" class="ota-bar-fill"></div></div>
+        <div id="fwProgressDetail" class="muted" style="font-size:.85em;margin-top:4px"></div>
+      </div>
+
+      <!-- Error state -->
+      <div id="fwError" class="hint-box error" style="display:none"></div>
+
+      <div class="actions" id="fwActions">
+        <button class="ghost" id="fwSkipBtn" data-go="filament-check">Skip for now</button>
+        <button class="primary big" id="fwUpdateBtn">Update SmartSpool →</button>
+      </div>
+    </section>
+
+    <!-- Step 3: filament check -------------------------------------- -->
+    <section class="step" data-step="filament-check">
+      <h1>Filament check</h1>
+      <p class="lead">This model is designed for:</p>
+      <div id="recMaterials" class="chips big"></div>
+
+      <p class="lead">In AMS Slot 1 right now:</p>
+      <div id="currentSlot" class="slot-card"></div>
+
+      <div id="filamentVerdict" class="verdict"></div>
+
+      <div class="actions">
+        <button class="ghost" data-go="welcome">← Back</button>
+        <button id="swapBtn" class="ghost" data-go="filament-pick">Swap filament</button>
+        <button id="filamentOkBtn" class="primary" data-go="plate">Looks good →</button>
+      </div>
+    </section>
+
+    <!-- Step 4: pick filament profile ------------------------------- -->
+    <section class="step" data-step="filament-pick">
+      <h1>Pick your filament</h1>
+      <p class="lead">
+        Which filament are you about to load? We'll set up Slot 1 to match.
+      </p>
+      <div id="profileGrid" class="profile-grid"></div>
+      <p class="muted hint">
+        Don't see your filament? Add it from the SSO-Lite web UI under
+        the <em>Profiles</em> tab, then come back here.
+      </p>
+      <div class="actions">
+        <button class="ghost" data-go="filament-check">← Back</button>
+      </div>
+    </section>
+
+    <!-- Step 5: tag / load filament --------------------------------- -->
+    <section class="step" data-step="tag">
+      <h1>Load &amp; tag your spool</h1>
+      <ol class="checklist">
+        <li>Take the new spool and stick a MIFARE 1K tag on the inner hub
+            if it doesn't already have one.</li>
+        <li>Load it into AMS Slot 1 (the leftmost slot) — push the
+            filament into the feeder until the printer beeps.</li>
+        <li>Tap the tag on your SSO-Lite reader.</li>
+      </ol>
+      <div id="tagStatus" class="status pending">Waiting for tag…</div>
+      <div id="assignedCard" class="slot-card" hidden></div>
+      <div class="actions">
+        <button class="ghost" data-go="filament-pick">← Pick different</button>
+        <button class="ghost" id="cancelWriteBtn">Cancel write</button>
+        <button class="primary" id="tagContinueBtn" data-go="plate" disabled>Continue →</button>
+      </div>
+    </section>
+
+    <!-- Step 6: build plate ----------------------------------------- -->
+    <section class="step" data-step="plate">
+      <h1>Build plate</h1>
+      <p class="lead">This model recommends:</p>
+      <div id="plateCard" class="plate-card"></div>
+      <details class="explainer">
+        <summary>What's a build plate, and why does it matter?</summary>
+        <p>
+          The build plate is the metal sheet your print sticks to. Different
+          plates are designed for different materials. PLA sticks best to
+          textured PEI or Cool Plate. PETG and ABS need engineering or
+          high-temp plates. Using the wrong plate is the most common cause
+          of prints peeling off mid-job, or worse, not coming off at all.
+        </p>
+        <p>
+          To swap plates, lift the current sheet off the magnet, place the
+          new one on top, and align it to the back-left corner.
+        </p>
+      </details>
+      <label class="check-row">
+        <input type="checkbox" id="plateOk">
+        The right plate is on my printer.
+      </label>
+      <div class="actions">
+        <button class="ghost" data-go="filament-check">← Back</button>
+        <button class="primary" id="plateContinueBtn" data-go="prep" disabled>Continue →</button>
+      </div>
+    </section>
+
+    <!-- Step 7: bed prep -------------------------------------------- -->
+    <section class="step" data-step="prep">
+      <h1>Quick prep</h1>
+      <p class="lead">A few things take 10 seconds and save 10 hours of failed prints:</p>
+      <label class="check-row"><input type="checkbox" class="prep-chk"> The build plate is clean (wipe with isopropyl alcohol if it's been touched)</label>
+      <label class="check-row"><input type="checkbox" class="prep-chk"> The plate sits flush on the magnet, aligned with the rear-left corner</label>
+      <label class="check-row"><input type="checkbox" class="prep-chk"> Nothing is stuck on the nozzle from the last print</label>
+      <label class="check-row"><input type="checkbox" class="prep-chk"> The printer's door / lid is in the position you want for this material</label>
+      <div class="actions">
+        <button class="ghost" data-go="plate">← Back</button>
+        <button class="primary" id="prepContinueBtn" data-go="send" disabled>I'm ready →</button>
+      </div>
+    </section>
+
+    <!-- Step 8: hand off to studio ---------------------------------- -->
+    <section class="step" data-step="send">
+      <h1>Send to Bambu Studio</h1>
+      <p class="lead">
+        Click below — Bambu Studio will open with this model already loaded.
+        Once it does, click the green <strong>Print</strong> button in the
+        upper-right of Studio to send it to your printer.
+      </p>
+      <div class="hint-box">
+        <strong>Tip:</strong> Make sure Bambu Studio is set to your printer
+        in LAN mode. If it asks you to log in, you can dismiss that —
+        Studio works fine without cloud login if your printer is bound by
+        access code.
+      </div>
+      <div class="actions">
+        <button class="ghost" data-go="prep">← Back</button>
+        <button class="primary big" id="openStudioBtn">Open in Bambu Studio</button>
+      </div>
+
+      <!-- Shown after the user clicks the button. We don't auto-advance,
+           because if the launch fails we want to know about it. -->
+      <div id="studioConfirm" class="hint-box" hidden>
+        <p style="margin-top:0"><strong>Did Bambu Studio open?</strong></p>
+        <div class="actions" style="margin-top:6px">
+          <button id="studioFailedBtn" class="ghost">No, it didn't open</button>
+          <button id="studioOkBtn" class="primary" data-go="done">Yes, it opened →</button>
+        </div>
+      </div>
+
+      <details id="studioHelp" class="explainer" hidden>
+        <summary>Bambu Studio didn't open?</summary>
+        <ol>
+          <li>
+            Try this direct link manually:<br>
+            <a id="manualStudioLink" href="#" target="_blank" rel="noopener">click to open</a>
+          </li>
+          <li>
+            If Chrome shows an "Open Bambu Studio?" prompt, click <strong>Open</strong>
+            (and tick "Always allow" so it doesn't ask again).
+          </li>
+          <li>
+            Make sure Bambu Studio is installed on your computer. If it
+            isn't, download it from <code>bambulab.com/en/download/studio</code>.
+          </li>
+          <li>
+            As a last resort: close this wizard and click MakerWorld's own
+            <em>Open in Studio</em> button.
+          </li>
+        </ol>
+      </details>
+
+      <div id="studioMissing" class="hint-box error" hidden>
+        Couldn't find a Bambu Studio link on this page. The model may not
+        be ready for direct printing — try downloading the file from
+        MakerWorld and opening it in Studio manually.
+      </div>
+    </section>
+
+    <!-- Step 9: done ----------------------------------------------- -->
+    <section class="step" data-step="done">
+      <h1>You're all set 🎉</h1>
+      <p class="lead">
+        In Bambu Studio: pick AMS Slot 1, then click the green
+        <strong>Print</strong> button. Your printer will warm up, do its
+        bed-leveling routine, and start.
+      </p>
+      <p class="muted">
+        Tip: stay in the room for the first layer. If it looks good, you can
+        usually walk away. If it's stringy or not sticking, hit pause and
+        check our prep list above.
+      </p>
+      <div class="actions">
+        <button class="primary" id="finishBtn">Done</button>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="wizard.js"></script>
+</body>
+</html>

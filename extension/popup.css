@@ -1,0 +1,25 @@
+:root{
+  --bg:#0d1117;--panel:#161b22;--fg:#e6edf3;--mut:#7d8590;--brd:#30363d;
+  --acc:#22a06b;--ok:#3fb950;--warn:#d29922;--err:#f85149;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--panel);color:var(--fg);
+  font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;width:300px}
+header{padding:10px 14px;border-bottom:1px solid var(--brd)}
+.brand{font-weight:700}
+main{padding:12px 14px}
+.card{background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:10px;margin-bottom:10px}
+.row{display:flex;justify-content:space-between;align-items:center;padding:3px 0}
+.pill{border:1px solid var(--brd);border-radius:999px;padding:1px 9px;font-size:.8em}
+.pill.ok{color:var(--ok);border-color:var(--ok)}
+.pill.warn{color:var(--warn);border-color:var(--warn)}
+.pill.err{color:var(--err);border-color:var(--err)}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:.85em;color:var(--mut)}
+.muted{color:var(--mut);font-size:.85em}
+.swatch{display:inline-block;width:12px;height:12px;border-radius:50%;
+  border:1px solid var(--brd);vertical-align:middle;margin-right:4px}
+.actions{display:flex;gap:8px;justify-content:flex-end}
+button{border:0;border-radius:6px;padding:7px 12px;font-size:.85em;cursor:pointer;font-weight:600}
+button.primary{background:var(--acc);color:#fff}
+button.ghost{background:transparent;border:1px solid var(--brd);color:var(--fg)}
+button.ghost:hover{background:#22272e}

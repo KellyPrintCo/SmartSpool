@@ -1,0 +1,79 @@
+/* content.css - styles injected into MakerWorld pages.
+ * All selectors are namespaced with .sso-mw- to avoid collisions.
+ */
+
+.sso-mw-wizbtn {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  margin: 0 8px 0 0;
+  background: linear-gradient(180deg,#22a06b,#1f8459);
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  font: 600 14px/1.2 system-ui, -apple-system, sans-serif;
+  letter-spacing: .2px;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0,0,0,.15);
+  transition: transform .08s ease, box-shadow .15s ease;
+  z-index: 1000;
+  vertical-align: middle;
+}
+.sso-mw-wizbtn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(31,132,89,.35);
+}
+.sso-mw-wizbtn:active { transform: translateY(0); }
+
+.sso-mw-wizbtn-ic { font-size: 16px; line-height: 1; }
+
+#sso-mw-wizbtn-float {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 99998;
+}
+#sso-mw-wizbtn-float .sso-mw-wizbtn {
+  padding: 12px 20px;
+  font-size: 15px;
+  border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.25);
+}
+
+#sso-mw-wizard-frame {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  border: 0;
+  z-index: 99999;
+  background: rgba(8,12,16,.55);
+}
+
+#sso-mw-reminder {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 99998;
+  max-width: 320px;
+  background: linear-gradient(180deg,#22a06b,#1f8459);
+  color: #fff;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.35);
+  padding: 14px 18px;
+  font: 14px/1.4 system-ui, -apple-system, sans-serif;
+  animation: sso-mw-slidein .25s ease-out;
+}
+#sso-mw-reminder strong { font-size: 1.05em; display: block; margin-bottom: 4px; }
+#sso-mw-reminder p { margin: 0 0 10px; opacity: .9 }
+#sso-mw-reminder em { font-style: normal; background: rgba(255,255,255,.18); padding: 1px 5px; border-radius: 4px; }
+#sso-mw-reminder button {
+  background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.3);
+  padding: 6px 12px; border-radius: 6px; font-size: .9em; font-weight: 600; cursor: pointer;
+}
+#sso-mw-reminder button:hover { background: rgba(255,255,255,.25) }
+@keyframes sso-mw-slidein {
+  from { transform: translateY(20px); opacity: 0 }
+  to   { transform: translateY(0); opacity: 1 }
+}
