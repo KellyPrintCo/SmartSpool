@@ -424,24 +424,53 @@ $('#btnFwCheck').onclick = checkFw;
 
 async function checkFw() {
   $('#fwLatest').textContent = 'checking…';
+  $('#fwStatus').textContent = '';
+  $('#fwStatus').className   = 'msg';
+  let r;
   try {
-    const r = await fetch(VERSION_JSON + '?t=' + Date.now());
-    _latestFw = await r.json();
-    $('#fwLatest').textContent = _latestFw.version;
-    const cur = $('#fw').textContent || '';
-    const newer = isNewer(_latestFw.version, cur.replace('v','').trim());
-    if (newer) {
-      $('#fwUpdateRow').style.display = '';
-      $('#fwNotes').textContent = _latestFw.release_notes || '';
-    } else {
-      $('#fwUpdateRow').style.display = 'none';
-      $('#fwStatus').textContent = 'Up to date.';
-      $('#fwStatus').className   = 'msg ok';
-    }
-  } catch(e) {
-    $('#fwLatest').textContent = 'error';
-    $('#fwStatus').textContent = 'Could not reach update server.';
+    r = await fetch(VERSION_JSON + '?t=' + Date.now(), { cache: 'no-store' });
+  } catch (e) {
+    /* fetch threw — typically network down, DNS failure, or CORS preflight failure */
+    $('#fwLatest').textContent = 'unreachable';
+    $('#fwStatus').textContent =
+      'Could not reach the update server. Check that this SmartSpool can reach the internet.';
     $('#fwStatus').className   = 'msg err';
+    return;
+  }
+  if (!r.ok) {
+    $('#fwLatest').textContent = 'not found';
+    if (r.status === 404) {
+      $('#fwStatus').innerHTML =
+        'Update manifest not found on GitHub. This usually means the repo isn\'t published yet, or ' +
+        'the URL in <code>web_pages.h</code> doesn\'t match your GitHub username.<br>' +
+        'Tried: <code>' + VERSION_JSON + '</code>';
+    } else {
+      $('#fwStatus').textContent = 'Update server returned HTTP ' + r.status + '.';
+    }
+    $('#fwStatus').className   = 'msg err';
+    return;
+  }
+  try {
+    _latestFw = await r.json();
+  } catch (e) {
+    $('#fwLatest').textContent = 'bad data';
+    $('#fwStatus').textContent =
+      'Update manifest returned invalid JSON. Check that version.json is valid.';
+    $('#fwStatus').className   = 'msg err';
+    return;
+  }
+  $('#fwLatest').textContent = _latestFw.version;
+  const cur = $('#fw').textContent || '';
+  const newer = isNewer(_latestFw.version, cur.replace('v','').trim());
+  if (newer) {
+    $('#fwUpdateRow').style.display = '';
+    $('#fwNotes').textContent = _latestFw.release_notes || '';
+    $('#fwStatus').textContent = 'Update available.';
+    $('#fwStatus').className   = 'msg';
+  } else {
+    $('#fwUpdateRow').style.display = 'none';
+    $('#fwStatus').textContent = 'Up to date.';
+    $('#fwStatus').className   = 'msg ok';
   }
 }
 

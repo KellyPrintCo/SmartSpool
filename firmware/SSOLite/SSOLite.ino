@@ -1125,8 +1125,8 @@ void handleOtaUpload() {
 
     if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
       g_ota.error = true;
-      String e; Update.printError(e);
-      strncpy(g_ota.error_msg, e.c_str(), sizeof(g_ota.error_msg)-1);
+      strncpy(g_ota.error_msg, Update.errorString(), sizeof(g_ota.error_msg)-1);
+      g_ota.error_msg[sizeof(g_ota.error_msg)-1] = '\0';
       Serial.printf("[OTA] begin error: %s\n", g_ota.error_msg);
     }
 
@@ -1154,8 +1154,8 @@ void handleOtaUpload() {
         Serial.printf("[OTA] upload OK — %u bytes total\n", g_ota.bytes_written);
       } else {
         g_ota.error = true;
-        String e; Update.printError(e);
-        strncpy(g_ota.error_msg, e.c_str(), sizeof(g_ota.error_msg)-1);
+        strncpy(g_ota.error_msg, Update.errorString(), sizeof(g_ota.error_msg)-1);
+        g_ota.error_msg[sizeof(g_ota.error_msg)-1] = '\0';
         Serial.printf("[OTA] end error: %s\n", g_ota.error_msg);
       }
     }
