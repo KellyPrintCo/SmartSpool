@@ -419,18 +419,30 @@ $('#btnSaveCfg').onclick = async ()=>{
 const VERSION_JSON = 'https://raw.githubusercontent.com/KellyPrintCo/SmartSpool/main/version.json';
 let _latestFw = null;
 
-$('#fwVer').textContent = document.getElementById('fw')?.textContent || '--';
+/* Always populate current FW from the dashboard pill on click; safer than reading at script load. */
 $('#btnFwCheck').onclick = checkFw;
 
 async function checkFw() {
+  /* Update the "Current version" cell from /api/health (fresh, not cached). */
+  $('#fwVer').textContent = 'checking…';
+  try {
+    const h = await fetch('/api/health?t=' + Date.now(), { cache: 'no-store' });
+    const hd = await h.json();
+    $('#fwVer').textContent = hd.fw || '--';
+  } catch (e) {
+    $('#fwVer').textContent = '?';
+  }
+
   $('#fwLatest').textContent = 'checking…';
   $('#fwStatus').textContent = '';
   $('#fwStatus').className   = 'msg';
   let r;
   try {
-    r = await fetch(VERSION_JSON + '?t=' + Date.now(), { cache: 'no-store' });
+    /* Strong cache-busting: query string + cache:no-store + Pragma no-cache header.
+     * GitHub's raw URLs aggressively cache at the CDN layer. */
+    r = await fetch(VERSION_JSON + '?t=' + Date.now() + '&nocache=' + Math.random(),
+                    { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } });
   } catch (e) {
-    /* fetch threw — typically network down, DNS failure, or CORS preflight failure */
     $('#fwLatest').textContent = 'unreachable';
     $('#fwStatus').textContent =
       'Could not reach the update server. Check that this SmartSpool can reach the internet.';
@@ -441,8 +453,7 @@ async function checkFw() {
     $('#fwLatest').textContent = 'not found';
     if (r.status === 404) {
       $('#fwStatus').innerHTML =
-        'Update manifest not found on GitHub. This usually means the repo isn\'t published yet, or ' +
-        'the URL in <code>web_pages.h</code> doesn\'t match your GitHub username.<br>' +
+        'Update manifest not found on GitHub. The repo may not exist or version.json is not at the root.<br>' +
         'Tried: <code>' + VERSION_JSON + '</code>';
     } else {
       $('#fwStatus').textContent = 'Update server returned HTTP ' + r.status + '.';
@@ -460,17 +471,23 @@ async function checkFw() {
     return;
   }
   $('#fwLatest').textContent = _latestFw.version;
-  const cur = $('#fw').textContent || '';
-  const newer = isNewer(_latestFw.version, cur.replace('v','').trim());
+  const cur = ($('#fwVer').textContent || '').replace(/^v/, '').trim();
+  const newer = isNewer(_latestFw.version, cur);
   if (newer) {
     $('#fwUpdateRow').style.display = '';
     $('#fwNotes').textContent = _latestFw.release_notes || '';
     $('#fwStatus').textContent = 'Update available.';
     $('#fwStatus').className   = 'msg';
-  } else {
+  } else if (cur === _latestFw.version) {
     $('#fwUpdateRow').style.display = 'none';
     $('#fwStatus').textContent = 'Up to date.';
     $('#fwStatus').className   = 'msg ok';
+  } else {
+    $('#fwUpdateRow').style.display = 'none';
+    $('#fwStatus').textContent =
+      'Installed version (' + cur + ') is newer than the published version (' + _latestFw.version + '). ' +
+      'If you just pushed an update to GitHub, the CDN may be serving a cached copy — wait a minute and try again.';
+    $('#fwStatus').className   = 'msg warn';
   }
 }
 
