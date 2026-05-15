@@ -25,10 +25,12 @@ const NS = "ssoMwWiz";
   injectButtonWhenReady();
 
   /* MakerWorld is a single-page app — the URL changes without a full
-   * navigation. Re-inject when the URL changes. */
+   * navigation. Re-inject when the URL changes and clear the captured
+   * studio URL since it belonged to the previous model. */
   const obs = new MutationObserver(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
+      g_capturedStudioUrl = null;
       setTimeout(injectButtonWhenReady, 400);
     }
   });
@@ -55,12 +57,20 @@ function injectMainWorldScript() {
 /* inject.js posts a window message whenever the page tries to launch a
  * bambustudio*:// URL. Forward those to the wizard iframe so it can
  * relaunch via the hidden-iframe trick (no UI flash) and advance. */
+/* When inject.js captures a bambustudio*:// URL on the page (during initial
+ * load, or via MutationObserver as MakerWorld renders), we both forward it
+ * to the wizard AND store it locally. The stored URL is used by
+ * triggerOpenInStudio() as a fast path — we already have the URL, no need
+ * to hunt for MakerWorld's button. */
+let g_capturedStudioUrl = null;
+
 function listenForCapturedUrls() {
   window.addEventListener("message", (ev) => {
     if (ev.source !== window) return;
     const m = ev.data;
     if (m && m.__ssoMwWiz && m.type === "capturedUrl" && m.url) {
       console.log("[mw-wiz] inject captured URL via", m.source, ":", m.url);
+      g_capturedStudioUrl = m.url;
       wizardFrame?.contentWindow?.postMessage(
         { type: "wizard:studioUrlFound", url: m.url }, "*");
     }
@@ -105,33 +115,71 @@ function findAnchor() {
     'a[href^="orcaslicer://"]',
     /* Class/data-attribute heuristics — MakerWorld changes these often. */
     'button[data-trace-name*="open_in_studio" i]',
+    'button[data-trace-name*="open-in-studio" i]',
     'button[data-trace-name*="print" i]',
     'button[class*="OpenInStudio" i]',
     'button[class*="open-in-studio" i]',
     'button[class*="PrintBtn" i]',
+    'button[aria-label*="bambu studio" i]',
+    'button[aria-label*="open in studio" i]',
+    'button[title*="bambu studio" i]',
+    /* Material-UI ButtonGroup primary button next to a dropdown arrow */
+    '.MuiButtonGroup-root > button:first-child',
   ];
   for (const sel of candidates) {
     try {
       const el = document.querySelector(sel);
-      if (el && el.offsetParent !== null) return el;
+      if (el && el.offsetParent !== null) {
+        const t = (el.innerText || el.textContent || "").toLowerCase();
+        /* If we matched a generic selector (like ButtonGroup), only return
+         * if the text content is plausible. Direct-scheme anchors and
+         * explicit data attributes are always trusted. */
+        const isGeneric = sel.includes("ButtonGroup");
+        if (!isGeneric || t.includes("bambu") || t.includes("studio") || t.includes("open in")) {
+          return el;
+        }
+      }
     } catch { /* selector might be invalid in some browsers */ }
   }
+
   /* Text-based scan as last resort. Match many languages and partial
-   * substrings — MakerWorld is internationalised. */
+   * substrings — MakerWorld is internationalised. We use includes()
+   * (not startsWith) because the button text may include icons, arrows,
+   * or whitespace from child elements. */
   const haystacks = [
     "open in bambu studio", "open in studio", "open in orcaslicer",
-    "send to printer", "print this model", "print",
+    "send to printer", "print this model",
     "in studio öffnen", "ouvrir dans bambu studio", "abrir en bambu studio",
     "studioで開く", "在 studio 中打开", "在bambu studio中打开",
   ];
   const buttons = document.querySelectorAll("button, a");
+  let bestMatch = null;
+  let bestScore = 0;
   for (const b of buttons) {
     if (b.offsetParent === null) continue;       // hidden
     const t = (b.innerText || b.textContent || "").trim().toLowerCase();
-    if (!t || t.length > 60) continue;
+    if (!t || t.length > 120) continue;
     for (const needle of haystacks) {
-      if (t === needle || t.startsWith(needle)) return b;
+      if (t.includes(needle)) {
+        /* Score: exact match > startsWith > contains. Prefer shorter buttons
+         * (less likely to be a wrapper containing unrelated text). */
+        let score = 1;
+        if (t === needle) score = 10;
+        else if (t.startsWith(needle)) score = 5;
+        /* Penalize very long matches — probably a parent container */
+        score -= Math.floor(t.length / 50);
+        if (score > bestScore) {
+          bestScore = score;
+          bestMatch = b;
+        }
+      }
     }
+  }
+  if (bestMatch) {
+    console.log("[mw-wiz] findAnchor text-match:", bestMatch.tagName,
+                "score=" + bestScore,
+                JSON.stringify((bestMatch.innerText || "").slice(0, 60)));
+    return bestMatch;
   }
   return null;
 }
@@ -227,36 +275,50 @@ function showOverlay() {
   if (wizardFrame) wizardFrame.style.display = "";
 }
 
-/* Click MakerWorld's own "Open in Studio" button or a-tag, hiding our
- * overlay first so any MakerWorld toast/modal is visible to the user.
- * NOTE: Most of the time, the wizard launches the bambustudio:// URL
- * itself via the hidden-iframe trick — this function is only called
- * as a last resort when the URL couldn't be scraped. */
+/* Click MakerWorld's own "Open in Studio" button programmatically.
+ * inject.js will catch the resulting bambustudioopen:// URL and forward it
+ * back to the wizard, which launches it via the hidden-iframe trick.
+ *
+ * We do NOT hide our wizard during this — the click is silent (no UI
+ * flash) because inject.js suppresses any visible launch, and we
+ * launch the captured URL ourselves through a hidden iframe. */
 function triggerOpenInStudio() {
-  /* If we missed the URL during initial scrape (it may have rendered
-   * after page-idle), try once more right before clicking. */
+  /* Best path: we already captured the URL via inject.js's MutationObserver
+   * during page load. Use it directly — no need to hunt for a button. */
+  if (g_capturedStudioUrl) {
+    console.log("[mw-wiz] using previously-captured studio URL:", g_capturedStudioUrl);
+    wizardFrame?.contentWindow?.postMessage(
+      { type: "wizard:studioUrlFound", url: g_capturedStudioUrl }, "*");
+    return;
+  }
+
+  /* Second path: maybe the URL is statically scrapeable. */
   const urlNow = scrapeStudioUrl();
   if (urlNow) {
     console.log("[mw-wiz] late-binding studio URL:", urlNow);
+    g_capturedStudioUrl = urlNow;   // cache for future clicks
     wizardFrame?.contentWindow?.postMessage(
       { type: "wizard:studioUrlFound", url: urlNow }, "*");
     return;
   }
+
+  /* Third path: find MakerWorld's button and click it. inject.js's
+   * interceptors will catch the URL when MakerWorld constructs it. */
   const target = findAnchor();
   if (!target) {
     console.warn("[mw-wiz] no Studio link or button found on page");
-    /* Diagnostic: dump candidate elements to console so the user can share. */
     debugDumpButtons();
     wizardFrame?.contentWindow?.postMessage({
       type: "wizard:studioLinkMissing"
     }, "*");
     return;
   }
-  console.log("[mw-wiz] clicking", target.tagName, target.outerHTML.slice(0, 120));
-  const prev = wizardFrame?.style.display;
-  if (wizardFrame) wizardFrame.style.display = "none";
+  console.log("[mw-wiz] programmatically clicking MakerWorld's button:",
+              target.tagName, target.outerHTML.slice(0, 120));
+
+  /* When inject.js sees the click, it'll forward the URL via the message
+   * listener (which now also stores it in g_capturedStudioUrl for next time). */
   target.click();
-  setTimeout(() => { if (wizardFrame) wizardFrame.style.display = prev || ""; }, 1500);
 }
 
 /* Dumps all visible buttons/anchors to console so we can diagnose why

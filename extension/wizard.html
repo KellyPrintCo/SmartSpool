@@ -47,10 +47,19 @@
         We need to talk to your SmartSpool device to read what's loaded.
         Make sure it's powered on and on the same Wi-Fi.
       </p>
+      <div id="connectHelp" class="hint-box" style="display:none">
+        <strong>If SmartSpool isn't being found:</strong>
+        <ol style="margin:6px 0 0 18px;padding:0">
+          <li>Confirm SmartSpool is powered on (LED visible)</li>
+          <li>Confirm your computer and SmartSpool are on the same Wi-Fi network</li>
+          <li>Try opening <code id="connectTriedUrl">http://ssolite.local/</code> in a new tab — does it load?</li>
+          <li>If not, find SmartSpool's IP address in your router or on the device's serial monitor, then click "Change device address" below and enter it as the Fallback IP</li>
+        </ol>
+      </div>
       <div class="actions">
         <button class="ghost" data-action="openSettings">Change device address</button>
         <button class="ghost" data-action="retryConnect">Try again</button>
-        <button class="primary" id="connectContinue" onclick="advanceFromConnect()" disabled>Continue →</button>
+        <button class="primary" id="connectContinue" disabled>Continue →</button>
       </div>
     </section>
 
@@ -204,6 +213,8 @@
         <button class="ghost" data-go="prep">← Back</button>
         <button class="primary big" id="openStudioBtn">Open in Bambu Studio</button>
       </div>
+
+      <div id="studioStatus" class="status" hidden></div>
 
       <!-- Shown after the user clicks the button. We don't auto-advance,
            because if the launch fails we want to know about it. -->

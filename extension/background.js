@@ -1,218 +1,203 @@
-/* background.js - service worker for the Print Wizard.
- *
- * Centralises all HTTP traffic to SSO-Lite and handles firmware OTA updates.
- */
+// background.js -- Print Wizard service worker
+// Pure ASCII source. No top-level await. No optional chaining on storage.
+
+console.log("[PrintWizard] service worker starting...");
 
 const DEFAULTS = {
   ssoHost: "ssolite.local",
   ssoPort: 80,
-  enableWizard: true,
+  ssoFallbackHost: "",
+  enableWizard: true
 };
 
-/* URL of the version manifest on GitHub.
- * Update this constant to point at your own repo after forking. */
-const VERSION_JSON_URL =
-  "https://raw.githubusercontent.com/KellyPrintCo/SmartSpool/main/version.json";
+const VERSION_JSON_URL = "https://raw.githubusercontent.com/KellyPrintCo/SmartSpool/main/version.json";
+const MIN_REQUIRED_FW  = "1.3.0";
 
-/* Minimum firmware version the extension requires.
- * If the device reports a version older than this, the update step is REQUIRED
- * (user cannot skip). Set to "0.0.0" to always treat updates as optional. */
-const MIN_REQUIRED_FW = "1.3.0";
-
-async function getSettings() {
-  const stored = await chrome.storage.sync.get(DEFAULTS);
-  return { ...DEFAULTS, ...stored };
+function getSettings() {
+  return chrome.storage.sync.get(DEFAULTS).then(function (stored) {
+    return Object.assign({}, DEFAULTS, stored);
+  });
 }
 
-async function ssoUrl(path) {
-  const s = await getSettings();
-  const host = s.ssoHost.replace(/^https?:\/\//, "").replace(/\/$/, "");
-  return `http://${host}:${s.ssoPort}${path}`;
+function buildUrl(host, port, path) {
+  var clean = String(host || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+  return "http://" + clean + ":" + port + path;
 }
 
-async function ssoFetch(path, init = {}) {
-  const url = await ssoUrl(path);
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 6000);
-  try {
-    const r = await fetch(url, { ...init, signal: ctrl.signal });
-    const text = await r.text();
-    let data;
-    try { data = JSON.parse(text); } catch { data = text; }
-    return { ok: r.ok, status: r.status, data };
-  } catch (e) {
-    return { ok: false, status: 0, error: e.message || String(e) };
-  } finally {
-    clearTimeout(timer);
-  }
+function fetchOnce(url, init, timeoutMs) {
+  var ctrl = new AbortController();
+  var t = setTimeout(function () { ctrl.abort(); }, timeoutMs || 6000);
+  var opts = Object.assign({}, init || {}, { signal: ctrl.signal });
+  return fetch(url, opts).then(function (r) {
+    return r.text().then(function (text) {
+      var data;
+      try { data = JSON.parse(text); } catch (e) { data = text; }
+      return { ok: r.ok, status: r.status, data: data, url: url };
+    });
+  }).catch(function (e) {
+    return { ok: false, status: 0, error: (e && e.message) || String(e), url: url };
+  }).finally(function () {
+    clearTimeout(t);
+  });
 }
 
-/* Content script and wizard talk to SSO-Lite through us via messages. */
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  (async () => {
-    try {
-      switch (msg.type) {
-        case "sso:health":
-          sendResponse(await ssoFetch("/api/health"));
-          break;
-        case "sso:status":
-          sendResponse(await ssoFetch("/api/status"));
-          break;
-        case "sso:profiles":
-          sendResponse(await ssoFetch("/api/profiles"));
-          break;
-        case "sso:assign":
-          sendResponse(await ssoFetch("/api/assign", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: msg.name }),
-          }));
-          break;
-        case "sso:queueWrite":
-          sendResponse(await ssoFetch("/api/write", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: msg.name }),
-          }));
-          break;
-        case "sso:cancelWrite":
-          sendResponse(await ssoFetch("/api/write/cancel", { method: "POST" }));
-          break;
-        case "sso:toggleRewrite":
-          sendResponse(await ssoFetch("/api/rewrite", { method: "POST" }));
-          break;
-        case "sso:cancelRewrite":
-          sendResponse(await ssoFetch("/api/rewrite/cancel", { method: "POST" }));
-          break;
-
-        /* ---- Firmware update ---- */
-        case "sso:checkUpdate":
-          sendResponse(await checkForUpdate());
-          break;
-        case "sso:performUpdate":
-          /* Long-running — downloads from GitHub, uploads to device.
-           * Returns {ok, error} when fully done; connection closes as device reboots. */
-          sendResponse(await performUpdate(msg.firmwareUrl));
-          break;
-        case "sso:pollReconnect":
-          /* Poll /api/health until the device is back (after reboot).
-           * Returns {ok, fw} when online, {ok:false} after timeout. */
-          sendResponse(await pollReconnect(msg.expectedVersion));
-          break;
-
-        case "settings:get":
-          sendResponse({ ok: true, data: await getSettings() });
-          break;
-        case "settings:set":
-          await chrome.storage.sync.set(msg.values || {});
-          sendResponse({ ok: true });
-          break;
-        default:
-          sendResponse({ ok: false, error: "unknown message: " + msg.type });
+function ssoFetch(path, init) {
+  return getSettings().then(function (s) {
+    var primary = buildUrl(s.ssoHost, s.ssoPort, path);
+    return fetchOnce(primary, init).then(function (r1) {
+      if (r1.ok) return r1;
+      if (s.ssoFallbackHost && s.ssoFallbackHost !== s.ssoHost) {
+        var fb = buildUrl(s.ssoFallbackHost, s.ssoPort, path);
+        return fetchOnce(fb, init).then(function (r2) {
+          if (r2.ok) return r2;
+          return {
+            ok: false,
+            status: r2.status,
+            error: "Tried " + primary + " and " + fb + ": " + (r2.error || r1.error || "no response"),
+            url: fb
+          };
+        });
       }
-    } catch (e) {
-      sendResponse({ ok: false, error: e.message || String(e) });
-    }
-  })();
-  return true;   // keep the channel open for async sendResponse
-});
+      return {
+        ok: false,
+        status: r1.status,
+        error: (r1.error || "HTTP " + r1.status) + " (tried " + primary + ")",
+        url: primary
+      };
+    });
+  });
+}
 
-chrome.runtime.onInstalled.addListener(async () => {
-  const cur = await chrome.storage.sync.get(DEFAULTS);
-  if (!cur.ssoHost) await chrome.storage.sync.set(DEFAULTS);
-});
-
-/* =========================================================================
-   FIRMWARE UPDATE HELPERS
-   ========================================================================= */
-
-/* Compare semver strings.  Returns true if `latest` is newer than `current`. */
 function isFwNewer(latest, current) {
-  const p = s => (s || "0.0.0").split(".").map(Number);
-  const [la, lb, lc] = p(latest);
-  const [ca, cb, cc] = p(current);
-  return la > ca || (la === ca && lb > cb) || (la === ca && lb === cb && lc > cc);
+  function p(s) { return String(s || "0.0.0").split(".").map(Number); }
+  var a = p(latest), b = p(current);
+  if (a[0] !== b[0]) return a[0] > b[0];
+  if (a[1] !== b[1]) return a[1] > b[1];
+  return a[2] > b[2];
 }
 
-async function checkForUpdate() {
-  try {
-    /* Fetch the version manifest, bypassing cache. */
-    const r = await fetch(VERSION_JSON_URL + "?t=" + Date.now());
-    if (!r.ok) throw new Error(`version.json fetch failed: ${r.status}`);
-    const manifest = await r.json();
-
-    /* Get current device firmware version. */
-    const health = await ssoFetch("/api/health");
-    const currentFw = health?.data?.fw || "0.0.0";
-
-    const updateAvailable = isFwNewer(manifest.version, currentFw);
-    const required = !isFwNewer(currentFw, MIN_REQUIRED_FW) && MIN_REQUIRED_FW !== "0.0.0";
-
-    return {
-      ok: true,
-      data: {
-        currentFw,
-        latestFw:       manifest.version,
-        updateAvailable,
-        required,                         // true  = must update, cannot skip
-        firmwareUrl:    manifest.firmware_url,
-        releaseNotes:   manifest.release_notes || "",
-        minCompatible:  manifest.min_compatible || "0.0.0",
-      },
-    };
-  } catch (e) {
-    return { ok: false, error: e.message || String(e) };
-  }
-}
-
-async function performUpdate(firmwareUrl) {
-  try {
-    if (!firmwareUrl) throw new Error("no firmwareUrl provided");
-
-    /* 1. Download firmware binary from GitHub. */
-    const binRes = await fetch(firmwareUrl, { redirect: "follow" });
-    if (!binRes.ok) throw new Error(`firmware download failed: ${binRes.status}`);
-    const contentType = binRes.headers.get("content-type") || "";
-    /* GitHub may redirect to CDN — accept binary or octet-stream. */
-    if (contentType.includes("text/html")) {
-      throw new Error("Firmware URL returned HTML — check your GitHub release URL.");
-    }
-    const blob = await binRes.blob();
-    if (blob.size < 100000) {
-      throw new Error(`Downloaded file is too small (${blob.size} bytes) — not a valid firmware binary.`);
-    }
-
-    /* 2. POST to device as multipart/form-data. */
-    const baseUrl = await ssoUrl("/api/update");
-    const fd = new FormData();
-    fd.append("firmware", blob, "firmware.bin");
-
-    const upRes = await fetch(baseUrl, { method: "POST", body: fd });
-    if (!upRes.ok) {
-      const errJson = await upRes.json().catch(() => ({}));
-      throw new Error(errJson.error || `upload failed: ${upRes.status}`);
-    }
-    /* Device is now rebooting — the response has been sent before restart. */
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: e.message || String(e) };
-  }
-}
-
-async function pollReconnect(expectedVersion, maxAttempts = 20, intervalMs = 2500) {
-  for (let i = 0; i < maxAttempts; i++) {
-    await new Promise(r => setTimeout(r, intervalMs));
-    try {
-      const r = await ssoFetch("/api/health");
-      if (r?.ok && r.data?.ok) {
-        const newFw = r.data.fw || "?";
-        /* Verify the version actually updated if we know what to expect. */
-        if (expectedVersion && newFw !== expectedVersion) {
-          console.warn(`[OTA] device is back but fw=${newFw}, expected ${expectedVersion}`);
-        }
-        return { ok: true, fw: newFw };
+function checkForUpdate() {
+  return fetch(VERSION_JSON_URL + "?t=" + Date.now(), { cache: "no-store" }).then(function (r) {
+    if (!r.ok) {
+      if (r.status === 404) {
+        return { ok: false, error: "Update manifest not found on GitHub (404). The file 'version.json' is not at " + VERSION_JSON_URL + ". Check that it is at the repository root on the 'main' branch and that the repo is public." };
       }
-    } catch { /* device still rebooting */ }
-  }
-  return { ok: false, error: "Device did not come back online within the expected time." };
+      return { ok: false, error: "Update server returned HTTP " + r.status };
+    }
+    return r.json().then(function (manifest) {
+      return ssoFetch("/api/health").then(function (health) {
+        if (!health.ok) {
+          return { ok: false, error: "Could not reach SmartSpool: " + (health.error || ("HTTP " + health.status)) };
+        }
+        var currentFw = (health.data && health.data.fw) || "0.0.0";
+        return {
+          ok: true,
+          data: {
+            currentFw: currentFw,
+            latestFw: manifest.version,
+            updateAvailable: isFwNewer(manifest.version, currentFw),
+            required: !isFwNewer(currentFw, MIN_REQUIRED_FW) && MIN_REQUIRED_FW !== "0.0.0",
+            firmwareUrl: manifest.firmware_url,
+            releaseNotes: manifest.release_notes || "",
+            minCompatible: manifest.min_compatible || "0.0.0"
+          }
+        };
+      });
+    });
+  }).catch(function (e) {
+    return { ok: false, error: (e && e.message) || String(e) };
+  });
 }
+
+function performUpdate(firmwareUrl) {
+  if (!firmwareUrl) return Promise.resolve({ ok: false, error: "No firmwareUrl provided" });
+  return fetch(firmwareUrl, { redirect: "follow" }).then(function (binRes) {
+    if (!binRes.ok) return { ok: false, error: "Firmware download failed: HTTP " + binRes.status };
+    var ct = binRes.headers.get("content-type") || "";
+    if (ct.indexOf("text/html") !== -1) {
+      return { ok: false, error: "Firmware URL returned HTML. Check the GitHub release URL." };
+    }
+    return binRes.blob().then(function (blob) {
+      if (blob.size < 100000) {
+        return { ok: false, error: "Downloaded file too small (" + blob.size + " bytes). Not a valid firmware binary." };
+      }
+      return getSettings().then(function (s) {
+        var fd = new FormData();
+        fd.append("firmware", blob, "firmware.bin");
+
+        function tryUpload(host) {
+          var u = buildUrl(host, s.ssoPort, "/api/update");
+          return fetch(u, { method: "POST", body: fd }).then(function (res) {
+            if (res.ok) return { ok: true, url: u };
+            return res.json().catch(function () { return {}; }).then(function (j) {
+              return { ok: false, url: u, error: j.error || ("HTTP " + res.status) };
+            });
+          }).catch(function (e) {
+            return { ok: false, url: u, error: (e && e.message) || String(e) };
+          });
+        }
+
+        return tryUpload(s.ssoHost).then(function (up1) {
+          if (up1.ok) return { ok: true };
+          if (s.ssoFallbackHost && s.ssoFallbackHost !== s.ssoHost) {
+            return tryUpload(s.ssoFallbackHost).then(function (up2) {
+              if (up2.ok) return { ok: true };
+              return { ok: false, error: "Upload failed: " + up2.error + " (tried " + up2.url + ")" };
+            });
+          }
+          return { ok: false, error: "Upload failed: " + up1.error + " (tried " + up1.url + ")" };
+        });
+      });
+    });
+  }).catch(function (e) {
+    return { ok: false, error: (e && e.message) || String(e) };
+  });
+}
+
+function pollReconnect() {
+  function attempt(i) {
+    if (i >= 24) return Promise.resolve({ ok: false, error: "Device did not come back online." });
+    return new Promise(function (r) { setTimeout(r, 2500); }).then(function () {
+      return ssoFetch("/api/health").then(function (h) {
+        if (h && h.ok && h.data && h.data.ok) return { ok: true, fw: h.data.fw || "?" };
+        return attempt(i + 1);
+      }).catch(function () { return attempt(i + 1); });
+    });
+  }
+  return attempt(0);
+}
+
+chrome.runtime.onMessage.addListener(function (msg, _sender, sendResponse) {
+  var t = (msg && msg.type) || "";
+  var promise;
+  switch (t) {
+    case "ping":            promise = Promise.resolve({ ok: true, pong: true }); break;
+    case "sso:health":      promise = ssoFetch("/api/health"); break;
+    case "sso:status":      promise = ssoFetch("/api/status"); break;
+    case "sso:profiles":    promise = ssoFetch("/api/profiles"); break;
+    case "sso:assign":      promise = ssoFetch("/api/assign",       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(msg.payload || (msg.name ? { name: msg.name } : {})) }); break;
+    case "sso:queueWrite":  promise = ssoFetch("/api/write",        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(msg.payload || (msg.name ? { name: msg.name } : {})) }); break;
+    case "sso:cancelWrite": promise = ssoFetch("/api/write/cancel", { method: "POST" }); break;
+    case "sso:toggleRewrite": promise = ssoFetch("/api/rewrite",        { method: "POST" }); break;
+    case "sso:cancelRewrite": promise = ssoFetch("/api/rewrite/cancel", { method: "POST" }); break;
+    case "sso:checkUpdate":   promise = checkForUpdate(); break;
+    case "sso:performUpdate": promise = performUpdate(msg.firmwareUrl); break;
+    case "sso:pollReconnect": promise = pollReconnect(); break;
+    case "settings:get":      promise = getSettings().then(function (d) { return { ok: true, data: d }; }); break;
+    case "settings:set":      promise = chrome.storage.sync.set(msg.values || {}).then(function () { return { ok: true }; }); break;
+    default:                  promise = Promise.resolve({ ok: false, error: "Unknown message type: " + t }); break;
+  }
+  promise.then(sendResponse).catch(function (e) {
+    sendResponse({ ok: false, error: (e && e.message) || String(e) });
+  });
+  return true; // keep channel open for async sendResponse
+});
+
+chrome.runtime.onInstalled.addListener(function () {
+  console.log("[PrintWizard] onInstalled fired");
+  chrome.storage.sync.get(DEFAULTS).then(function (cur) {
+    if (!cur.ssoHost) chrome.storage.sync.set(DEFAULTS);
+  });
+});
+
+console.log("[PrintWizard] service worker ready.");

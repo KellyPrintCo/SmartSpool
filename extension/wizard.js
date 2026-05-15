@@ -73,12 +73,17 @@ window.addEventListener("message", ev => {
   }
   if (m.type === "wizard:studioUrlFound" && m.url) {
     /* inject.js captured a bambustudio*:// URL on the page. Clear the
-     * capture-timeout, bring the wizard back into view, launch via our
-     * hidden iframe (no UI flash), and show the confirmation panel. */
+     * capture-timeout, launch via our hidden iframe (no UI flash), and
+     * show the confirmation panel. */
     console.log("[mw-wiz wizard] late-bound studio URL:", m.url);
     if (state.captureTimer) { clearTimeout(state.captureTimer); state.captureTimer = null; }
     state.meta.studioUrl = m.url;
-    parent.postMessage({ type: "wizard:show" }, "*");
+    const status = $("#studioStatus");
+    if (status) {
+      status.textContent = "Opening Bambu Studio…";
+      status.className   = "status ok";
+      status.hidden      = false;
+    }
     const link = $("#manualStudioLink");
     link.href = m.url;
     link.textContent = m.url.length > 80 ? m.url.slice(0, 77) + "…" : m.url;
@@ -115,6 +120,10 @@ function hookButtons() {
       }
     });
   $('[data-action="retryConnect"]').onclick = () => tryConnect();
+
+  /* The Continue button on the connect step used to use inline onclick=,
+   * which violates MV3 CSP. Bind it programmatically here instead. */
+  $("#connectContinue").addEventListener("click", () => advanceFromConnect());
 
   $("#cancelWriteBtn").onclick = () =>
     chrome.runtime.sendMessage({ type: "sso:cancelWrite" });
@@ -165,22 +174,37 @@ function attemptOpenStudio() {
     return;
   }
 
-  /* No static URL on the page (MakerWorld builds it dynamically at click
-   * time). Hide our overlay so the user can click MakerWorld's own Print
-   * button — inject.js is listening and will capture the URL the moment
-   * MakerWorld's flow generates it. We then relaunch via hidden iframe. */
-  $("#studioConfirm").hidden = true;     // wait for capture, not yes/no
-  parent.postMessage({ type: "wizard:hideForUserClick" }, "*");
-  // Set a timeout so the user doesn't get permanently stuck
+  /* No static URL on the page. Ask the content script to programmatically
+   * click MakerWorld's own "Open in Bambu Studio" button. inject.js will
+   * capture the resulting bambustudioopen:// URL and forward it back to
+   * us, at which point we relaunch via hidden iframe.
+   *
+   * The user never sees MakerWorld's modal or has to do anything — the
+   * whole thing happens behind our wizard UI. */
+  $("#studioConfirm").hidden = true;
+  const status = $("#studioStatus");
+  if (status) {
+    status.textContent = "Opening Bambu Studio…";
+    status.className = "status pending";
+    status.hidden = false;
+  }
+
+  parent.postMessage({ type: "wizard:openInStudio" }, "*");
+
+  /* Timeout in case the click is intercepted or the URL is never captured. */
   if (state.captureTimer) clearTimeout(state.captureTimer);
   state.captureTimer = setTimeout(() => {
-    parent.postMessage({ type: "wizard:show" }, "*");
+    /* If we still haven't seen a capture, show help. */
+    if (status) {
+      status.textContent = "Couldn't catch the launch automatically.";
+      status.className = "status err";
+    }
     $("#studioConfirm").hidden = false;
     $("#studioHelp").hidden = false;
     $("#studioHelp").open = true;
     $("#manualStudioLink").textContent = "(no direct link auto-detected)";
     $("#manualStudioLink").removeAttribute("href");
-  }, 30000);
+  }, 8000);
 }
 
 /* The hidden-iframe protocol-launch pattern: create an off-screen iframe,
@@ -225,12 +249,14 @@ async function tryConnect() {
   el.className = "status pending";
   el.textContent = "Looking for SSO-Lite…";
   $("#connectContinue").disabled = true;
+  $("#connectHelp").style.display = "none";   // hide help while pending
 
   const r = await sendBg({ type: "sso:health" });
   if (r?.ok && r.data?.ok) {
     state.sso.connected = true;
     el.className = "status ok";
     el.textContent = `Connected (${r.data.name} v${r.data.fw})`;
+    $("#connectHelp").style.display = "none";
 
     // Eagerly check for firmware updates while user reads the status.
     el.textContent += "  ·  Checking for updates…";
@@ -243,9 +269,10 @@ async function tryConnect() {
         el.textContent = `Connected (${r.data.name} v${r.data.fw}) — up to date`;
       }
     } else {
-      // Couldn't reach update server — not a blocking error
+      // Couldn't reach update server — not a blocking error, just log it
       state.fwInfo = null;
       el.textContent = `Connected (${r.data.name} v${r.data.fw})`;
+      console.warn("[Print Wizard] update check failed:", upd?.error);
     }
 
     $("#connectContinue").disabled = false;
@@ -254,8 +281,14 @@ async function tryConnect() {
   } else {
     state.sso.connected = false;
     el.className = "status err";
-    const reason = r?.error || (`HTTP ${r?.status || "?"}`);
-    el.textContent = `Couldn't reach SSO-Lite: ${reason}`;
+    const reason = r?.error || `HTTP ${r?.status || "?"}`;
+    el.textContent = `Couldn't reach SmartSpool: ${reason}`;
+    /* Show the troubleshooting box and fill in the URL that was tried so the
+     * user can paste it into a new tab to verify connectivity manually. */
+    $("#connectHelp").style.display = "";
+    if (r?.url) {
+      $("#connectTriedUrl").textContent = r.url.replace(/\/api\/health$/, "/");
+    }
   }
 }
 
@@ -487,7 +520,12 @@ async function beginTagWrite() {
   const r = await sendBg({ type: "sso:queueWrite", name: p.name });
   if (!r?.ok) {
     $("#tagStatus").className = "status err";
-    $("#tagStatus").textContent = `Couldn't queue write: ${r?.error || r?.status}`;
+    /* If the device responded but with a non-OK status, r.data may contain its
+     * plain-text error (e.g. "profile not found"). Show that when possible
+     * since it's far more useful than just "HTTP 404". */
+    const deviceMsg = (typeof r?.data === "string" && r.data.trim()) ? r.data.trim() : "";
+    const detail    = deviceMsg || r?.error || (`HTTP ${r?.status || "?"}`);
+    $("#tagStatus").textContent = `Couldn't queue write: ${detail}`;
     return;
   }
   $("#tagStatus").textContent = `Tap your tag on the SSO-Lite reader (you have 60s).`;

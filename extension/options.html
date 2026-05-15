@@ -19,12 +19,20 @@
 <main>
   <h1>Print Wizard Settings</h1>
   <p class="muted">
-    The wizard talks to your SSO-Lite device over your local network.
+    The wizard talks to your SmartSpool device over your local network.
     Use the mDNS hostname <code>ssolite.local</code> if your computer
-    supports it (most do), or enter the device IP directly.
+    supports it (most Macs do natively; Windows requires Bonjour). If that
+    doesn't work, fill in the Fallback IP below.
   </p>
-  <label>SSO-Lite address</label>
+  <label>SmartSpool address (primary)</label>
   <input id="ssoHost" placeholder="ssolite.local" autocomplete="off">
+
+  <label>Fallback IP <span class="muted">(optional — used if the primary fails)</span></label>
+  <input id="ssoFallbackHost" placeholder="e.g. 192.168.1.42" autocomplete="off">
+  <p class="muted" style="font-size:.85em;margin-top:4px">
+    Find your SmartSpool's IP on the device's web UI (Dashboard → Wi-Fi shows the IP),
+    or in your router's connected devices list.
+  </p>
 
   <label>Port (almost always 80)</label>
   <input id="ssoPort" type="number" value="80">
@@ -34,6 +42,7 @@
     <button id="saveBtn" class="primary">Save</button>
     <span id="msg" class="ok-msg"></span>
   </div>
+  <div id="testResult" style="margin-top:14px"></div>
 </main>
 <script src="options.js"></script>
 </body>
