@@ -40,7 +40,7 @@
 /* =========================================================================
  *  CONSTANTS
  * ========================================================================= */
-#define FW_VERSION       "1.3.3"
+#define FW_VERSION       "1.3.4"
 #define MAGIC_HEADER     "SSO1"          // 4 bytes - identifies our tags
 /* Storage spans 4 blocks across 2 sectors = 64 bytes total.
  * Sector trailers (blocks 7, 11) are NEVER touched. */
@@ -508,6 +508,24 @@ void handleTag(MFRC522::Uid &uid) {
     return;
   }
 
+  /* Probe block 4 with the default key. If auth fails, this is almost
+   * certainly a Bambu spool tag — same MIFARE Classic chip but locked
+   * with a non-default key. Treat it like a "non-Classic" official tag:
+   * mark the lock pill active, disable auto-assign, and do not attempt
+   * to read or write. */
+  if (!authBlock(DATA_BLOCK_A)) {
+    g_officialTagDetected = true;
+    Serial.println(F("[RFID] Official tag detected (auth fail on default key). Auto-assign disabled."));
+    Serial.println(F("       Use a fresh MIFARE 1K sticker for SmartSpool tags."));
+    blinkLED(3, 100);
+    setLED(false);
+    return;
+  }
+  /* If we got here, block 4 authed successfully — this tag uses the default
+   * key, so it's safe to read/write. Clear the official-tag flag in case it
+   * was set by a previous non-Classic scan. */
+  g_officialTagDetected = false;
+
   /* v1.2: auto-rewrite — if there's a queued tag rewrite for THIS UID
    * (printer reported a slot 1 change since this tag was last scanned),
    * write the new profile to the tag before doing the normal read flow. */
@@ -907,11 +925,27 @@ void processReport(const JsonDocument &doc) {
    * In both modes we ignore reports that match what we just sent (echoes).
    */
   static uint32_t lastReapply = 0;
-  bool drifted = (g_lastScan.valid &&
-                  strlen(g_lastScan.profile.code) > 0 &&
-                  strcmp(g_lastScan.profile.code, idx) != 0 &&
-                  strlen(idx) > 0 &&
+
+  /* Drift detection. The printer is the source of truth; if its slot 1
+   * differs from our last scan, the user changed something on the
+   * touchscreen. We detect change in CODE *or* COLOR — because for our
+   * default Generic PLA profiles all colors share code "GFL99", we'd
+   * miss color-only changes if we only compared codes. */
+  bool codeChanged  = strlen(g_lastScan.profile.code) > 0 && strlen(idx) > 0 &&
+                      strcmp(g_lastScan.profile.code, idx) != 0;
+  /* Color: report's "col" is RRGGBBAA, our stored is RRGGBB. Compare prefixes. */
+  bool colorChanged = false;
+  if (strlen(g_lastScan.profile.color) >= 6 && strlen(col) >= 6) {
+    colorChanged = (strncasecmp(g_lastScan.profile.color, col, 6) != 0);
+  }
+  bool drifted = (g_lastScan.valid && (codeChanged || colorChanged) &&
                   !g_officialTagDetected);
+
+  if (drifted) {
+    Serial.printf("[DRIFT] last=%s/%s  printer=%s/%.6s  code_changed=%d color_changed=%d\n",
+                  g_lastScan.profile.code, g_lastScan.profile.color,
+                  idx, col, codeChanged, colorChanged);
+  }
 
   if (drifted && g_cfg.auto_rewrite) {
     /* Build a profile from the report. Prefer a known local profile by
