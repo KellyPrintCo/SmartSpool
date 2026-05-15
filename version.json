@@ -1,7 +1,7 @@
 {
-  "version": "1.3.3",
-  "firmware_url": "https://github.com/KellyPrintCo/SmartSpool/releases/download/v1.3.3/firmware.bin",
-  "release_notes": "v1.3.3: Fixed RFID auth-cache bug (writes followed by reads now work reliably). Fixed color-preservation bug (rewriting a tag to a different color now actually changes the color, not just the swatch label). Added /api/check-update proxy endpoint so the dashboard's Check for Updates no longer fails with 'unreachable' due to Chrome's mixed-content blocking on local networks. Added [AUTH] diagnostic logging for easier troubleshooting.",
+  "version": "1.3.4",
+  "firmware_url": "https://github.com/KellyPrintCo/SmartSpool/releases/download/v1.3.4/firmware.bin",
+  "release_notes": "v1.3.4: Auto-rewrite now triggers on color-only touchscreen changes (not just material/code changes). Bambu spool tags are now detected by auth-fail-on-block-4 (they are MIFARE Classic but use proprietary keys) and the official-tag lock activates so we leave them alone. Added [DRIFT] diagnostic logging when touchscreen state diverges from last scan.",
   "required": false,
   "min_compatible": "1.3.0"
 }
