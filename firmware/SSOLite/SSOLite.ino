@@ -18,6 +18,7 @@
 #include <MFRC522.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <WebServer.h>
@@ -39,7 +40,7 @@
 /* =========================================================================
  *  CONSTANTS
  * ========================================================================= */
-#define FW_VERSION       "1.3.0"
+#define FW_VERSION       "1.3.3"
 #define MAGIC_HEADER     "SSO1"          // 4 bytes - identifies our tags
 /* Storage spans 4 blocks across 2 sectors = 64 bytes total.
  * Sector trailers (blocks 7, 11) are NEVER touched. */
@@ -412,9 +413,48 @@ void initRFID() {
   }
 }
 
+/* Auth cache state - file-scope so we can clear it from elsewhere. */
+static int8_t  s_authedSector = -1;
+static uint8_t s_authedUid[10] = {0};
+static uint8_t s_authedUidLen = 0;
+
+void invalidateAuthCache() {
+  s_authedSector = -1;
+  s_authedUidLen = 0;
+}
+
 bool authBlock(uint8_t block) {
-  return rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, block,
-                               &defaultKey, &(rfid.uid)) == MFRC522::STATUS_OK;
+  /* MFRC522 quirk: once authenticated to a sector, re-authenticating to
+   * another block in the SAME sector often fails on bargain RC522 boards.
+   * We track the currently-authed sector and skip the auth if the next
+   * block is in the same sector. Sectors 0-31 each contain 4 blocks:
+   * blocks 0-3 = sector 0, blocks 4-7 = sector 1, blocks 8-11 = sector 2, etc.
+   *
+   * NOTE: Call invalidateAuthCache() whenever PCD_StopCrypto1 or PICC_HaltA
+   * is invoked, so the next auth on the same card re-runs PCD_Authenticate. */
+  uint8_t sector = block / 4;
+
+  bool sameCard = (s_authedUidLen == rfid.uid.size) &&
+                  (memcmp(s_authedUid, rfid.uid.uidByte, rfid.uid.size) == 0);
+
+  if (sameCard && s_authedSector == (int8_t)sector) {
+    /* Already authed to this sector for this card - nothing to do. */
+    return true;
+  }
+
+  auto status = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, block,
+                                      &defaultKey, &(rfid.uid));
+  if (status != MFRC522::STATUS_OK) {
+    Serial.printf("[AUTH] block %u (sector %u) FAIL status=%d\n", block, sector, status);
+    s_authedSector = -1;
+    s_authedUidLen = 0;
+    return false;
+  }
+  Serial.printf("[AUTH] block %u (sector %u) OK\n", block, sector);
+  s_authedSector = sector;
+  s_authedUidLen = rfid.uid.size;
+  memcpy(s_authedUid, rfid.uid.uidByte, rfid.uid.size);
+  return true;
 }
 
 void rfidPoll() {
@@ -433,6 +473,7 @@ void rfidPoll() {
     Serial.println(F("[RFID] Non-Classic tag (likely Bambu/NTAG). Auto-assign disabled."));
     rfid.PICC_HaltA();
     rfid.PCD_StopCrypto1();
+    invalidateAuthCache();
     return;
   }
   g_officialTagDetected = false;
@@ -441,6 +482,7 @@ void rfidPoll() {
 
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
+  invalidateAuthCache();
 }
 
 void handleTag(MFRC522::Uid &uid) {
@@ -508,9 +550,28 @@ void handleTag(MFRC522::Uid &uid) {
     return;
   }
 
-  /* Resolve to local profile (canonicalises temps) */
+  /* Resolve to local profile.
+   *
+   * The tag is the source of truth for COLOR and CODE (the user wrote
+   * those deliberately). The local profile, if found, only contributes
+   * canonical immutable fields (temperatures, flow, full name) so different
+   * tag generations stay consistent.
+   *
+   * Previously this entire profile was overwritten, which threw away the
+   * color the user just wrote to the tag and made every "Generic PLA"
+   * variant show as the black default. */
   FilamentProfile *known = findProfileByCode(p.code);
-  if (known) p = *known;
+  if (known) {
+    /* Copy canonical fields only; keep the tag's color and (already-set) code. */
+    strncpy(p.material,  known->material, sizeof(p.material)-1);
+    strncpy(p.brand,     known->brand,    sizeof(p.brand)-1);
+    p.nozzle_min = known->nozzle_min;
+    p.nozzle_max = known->nozzle_max;
+    p.bed_temp   = known->bed_temp;
+    p.flow_x1000 = known->flow_x1000;
+    /* Update display name to reflect the tag's actual color when possible. */
+    snprintf(p.name, sizeof(p.name), "%s %s", p.brand, p.material);
+  }
 
   /* Update last-scan and history */
   memcpy(g_lastScan.uid, uid.uidByte, uid.size);
@@ -1104,15 +1165,66 @@ void apiCancelRewrite() {
 }
 
 /* =========================================================================
- *  OTA FIRMWARE UPDATE  (v1.3)
+ *  /api/check-update  (v1.3.3)
  *
- *  The Chrome extension (Print Wizard) downloads firmware.bin from GitHub
- *  and POSTs it here as multipart/form-data with field name "firmware".
- *  The ESP32 Update library writes it to the OTA partition and we reboot.
- *
- *  Endpoint: POST /api/update
- *  Endpoint: GET  /api/update/status   (poll during / after upload)
+ *  Browsers refuse mixed-content fetches from http://ssolite.local/ to
+ *  https://raw.githubusercontent.com/ when the device is on a private
+ *  network. We work around this by having the ESP32 itself fetch the
+ *  version manifest from GitHub over HTTPS and serve the response to
+ *  the dashboard. The browser only ever talks to ssolite.local.
  * ========================================================================= */
+
+void apiCheckUpdate() {
+  sendCors();
+  /* The GitHub raw URL must match what the dashboard / extension also use. */
+  const char *url = "https://raw.githubusercontent.com/KellyPrintCo/SmartSpool/main/version.json";
+
+  WiFiClientSecure secure;
+  secure.setInsecure();   /* GitHub uses a public CA but we skip validation to keep code small */
+
+  HTTPClient http;
+  http.setTimeout(8000);
+  http.useHTTP10(true);
+  if (!http.begin(secure, url)) {
+    httpd.send(502, "application/json", "{\"ok\":false,\"error\":\"begin() failed\"}");
+    return;
+  }
+  http.addHeader("Cache-Control", "no-cache");
+  int code = http.GET();
+  if (code != 200) {
+    String body = http.getString();
+    StaticJsonDocument<256> d;
+    d["ok"] = false;
+    if (code == 404) {
+      d["error"] = "version.json not found on GitHub (404). Check the file is at the repo root on the 'main' branch and the repo is public.";
+    } else {
+      d["error"] = String("HTTP ") + code;
+    }
+    String out; serializeJson(d, out);
+    httpd.send(code > 0 ? code : 502, "application/json", out);
+    http.end();
+    return;
+  }
+  String body = http.getString();
+  http.end();
+
+  /* Validate it parses as JSON before forwarding. */
+  StaticJsonDocument<512> probe;
+  auto err = deserializeJson(probe, body);
+  if (err) {
+    StaticJsonDocument<256> d;
+    d["ok"]    = false;
+    d["error"] = String("JSON parse error: ") + err.c_str();
+    String out; serializeJson(d, out);
+    httpd.send(502, "application/json", out);
+    return;
+  }
+  /* Forward the manifest verbatim. The dashboard JS already knows the
+   * fields it expects (version, firmware_url, release_notes, etc). */
+  httpd.send(200, "application/json", body);
+}
+
+
 
 void handleOtaUpload() {
   HTTPUpload &up = httpd.upload();
@@ -1241,6 +1353,7 @@ void initWebServer() {
   /* v1.3 OTA — the upload handler is the second callback argument */
   httpd.on("/api/update", HTTP_POST, handleOtaComplete, handleOtaUpload);
   httpd.on("/api/update/status", HTTP_GET, apiOtaStatus);
+  httpd.on("/api/check-update", HTTP_GET, apiCheckUpdate);
 
   /* CORS preflight: respond 204 to any OPTIONS request on /api/* */
   httpd.onNotFound([](){

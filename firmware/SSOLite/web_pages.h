@@ -416,7 +416,11 @@ $('#btnSaveCfg').onclick = async ()=>{
 };
 
 /* ---- Firmware update ---- */
-const VERSION_JSON = 'https://raw.githubusercontent.com/KellyPrintCo/SmartSpool/main/version.json';
+/* In v1.3.3+ the dashboard hits the ESP32's /api/check-update which proxies
+ * to raw.githubusercontent.com. This avoids Chrome's mixed-content / Private
+ * Network Access blocking that prevents an http://ssolite.local page from
+ * fetching https URLs on local networks. */
+const VERSION_JSON = '/api/check-update';
 let _latestFw = null;
 
 /* Always populate current FW from the dashboard pill on click; safer than reading at script load. */
@@ -438,14 +442,20 @@ async function checkFw() {
   $('#fwStatus').className   = 'msg';
   let r;
   try {
-    /* Strong cache-busting: query string + cache:no-store + Pragma no-cache header.
-     * GitHub's raw URLs aggressively cache at the CDN layer. */
+    /* Cache busting: query string + cache:no-store. We intentionally
+     * avoid setting a Cache-Control request header here, because doing so
+     * forces a CORS preflight (OPTIONS) which GitHub's raw.githubusercontent.com
+     * does not always answer with the matching Allow-Headers. The query
+     * string + cache:no-store is enough to bypass the browser cache. */
     r = await fetch(VERSION_JSON + '?t=' + Date.now() + '&nocache=' + Math.random(),
-                    { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } });
+                    { cache: 'no-store' });
   } catch (e) {
     $('#fwLatest').textContent = 'unreachable';
-    $('#fwStatus').textContent =
-      'Could not reach the update server. Check that this SmartSpool can reach the internet.';
+    $('#fwStatus').innerHTML =
+      'Could not reach the update server.<br>' +
+      '<small>' + (e.message || String(e)) + '</small><br>' +
+      'Try opening <code>' + VERSION_JSON + '</code> in a new tab — if it loads, ' +
+      'the issue is in this dashboard. If it 404s, version.json isn\'t at that URL on GitHub.';
     $('#fwStatus').className   = 'msg err';
     return;
   }
